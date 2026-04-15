@@ -1,0 +1,40 @@
+{
+    "name": "dicom-3d-desktop",
+    "version": "1.0.0",
+    "private": true,
+    "description": "DICOM 3D 可视化桌面版（Electron）",
+    "main": "main.js",
+    "scripts": {
+        "start": "electron .",
+        "dist:win": "electron-builder --win --x64"
+    },
+    "devDependencies": {
+        "electron": "^32.2.7",
+        "electron-builder": "^24.13.3"
+    },
+    "build": {
+        "appId": "com.local.dicom3d.desktop",
+        "productName": "dicom-3d-desktop",
+        "files": [
+            "index.html",
+            "styles.css",
+            "app.js",
+            "bootstrap_cn_v1.js",
+            "main.js",
+            "preload.js"
+        ],
+        "directories": {
+            "output": "release"
+        },
+        "win": {
+            "target": [
+                {
+                    "target": "nsis",
+                    "arch": [
+                        "x64"
+                    ]
+                }
+            ]
+        }
+    }
+}

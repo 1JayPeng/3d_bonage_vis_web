@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DICOM 3D 点云可视化</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+    <div class="bg-shape bg-shape-a"></div>
+    <div class="bg-shape bg-shape-b"></div>
+
+    <main class="app-shell">
+        <section class="panel">
+            <h1>3D 断层超声点云</h1>
+            <p class="subtitle">选择同一目录下的全部 DICOM 文件，自动重建并可交互查看点云。</p>
+
+            <div class="action-row" id="desktopDirBtnRow" style="display: none; margin-bottom: 12px;">
+                <button id="selectDesktopDirBtn" class="action-btn" type="button">选择 DICOM 目录</button>
+            </div>
+
+            <label class="file-picker" id="webDirPicker">
+                <span>选择 DICOM 目录</span>
+                <input id="folderInput" type="file" webkitdirectory directory multiple />
+            </label>
+
+            <div class="action-row">
+                <button id="exportDicomBtn" class="action-btn" type="button" disabled>导出删除版 DICOM</button>
+            </div>
+
+            <div class="controls">
+                <label>
+                    <span>强度阈值</span>
+                    <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.30" />
+                    <output id="thresholdValue">0.30</output>
+                    <small>仅保留亮度高于该阈值的体素。越高越稀疏、噪点越少。</small>
+                </label>
+
+                <label>
+                    <span>规则染色：Y 阈值占比（y &lt; ratio * rows）</span>
+                    <input id="waterBandRatio" type="range" min="0.05" max="0.95" step="0.01" value="0.05" />
+                    <output id="waterBandRatioValue">0.05</output>
+                    <small>满足该 Y 条件的体素将按 Y 规则处理（Y 规则颜色为绿色）。</small>
+                </label>
+
+                <label>
+                    <span>Y 规则显示模式</span>
+                    <select id="waterRuleModeY">
+                        <option value="none">不染色不隐藏</option>
+                        <option value="color" selected>染色不隐藏</option>
+                        <option value="hide">隐藏</option>
+                    </select>
+                    <small>Y 规则三态：不处理、绿色标记、直接隐藏。</small>
+                </label>
+
+                <label>
+                    <span>规则染色：X 阈值占比（x 位于正向侧末端 ratio 区间）</span>
+                    <input id="waterBandRatioX" type="range" min="0.05" max="0.95" step="0.01" value="0.15" />
+                    <output id="waterBandRatioXValue">0.15</output>
+                    <small>满足该 X 条件的体素将按 X 规则处理（X 规则颜色为红色，当前使用正向一侧）。</small>
+                </label>
+
+                <label>
+                    <span>X 规则显示模式</span>
+                    <select id="waterRuleModeX">
+                        <option value="none">不染色不隐藏</option>
+                        <option value="color" selected>染色不隐藏</option>
+                        <option value="hide">隐藏</option>
+                    </select>
+                    <small>X 规则三态：不处理、红色标记、直接隐藏。</small>
+                </label>
+
+                <label>
+                    <span>X/Y 同时命中时的颜色策略</span>
+                    <select id="waterConflictMode">
+                        <option value="mix" selected>混色（红+绿）</option>
+                        <option value="x">X 优先（红色）</option>
+                        <option value="y">Y 优先（绿色）</option>
+                    </select>
+                    <small>仅对同一体素同时命中 X 与 Y 规则时生效。</small>
+                </label>
+
+                <label style="align-items: flex-start;">
+                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                        <span>蓝色斜向染色角度（从 +Z 向 +Y 偏转）</span>
+                        <button id="autoDetectObliqueBtn" class="action-btn" type="button" style="padding: 2px 8px; font-size: 12px; margin-bottom: 4px;">自动检测</button>
+                    </div>
+                    <input id="obliqueAngleDeg" type="range" min="0" max="89" step="1" value="51" />
+                    <output id="obliqueAngleDegValue">51°</output>
+                    <small>在 Y-Z 方向定义蓝色斜向染色角度（单位：度）。</small>
+                </label>
+
+                <label>
+                    <span>蓝色斜向起点（Z 轴位置占比）</span>
+                    <input id="obliqueStartZRatio" type="range" min="0" max="0.95" step="0.01" value="0.72" />
+                    <output id="obliqueStartZRatioValue">0.72</output>
+                    <small>起点在 Z 轴上：zStart = ratio * depth，支持连续调整。</small>
+                </label>
+
+                <label>
+                    <span>蓝色规则形态</span>
+                    <select id="bluePatternMode">
+                        <option value="oblique">仅倾斜区域</option>
+                        <option value="plane">仅平面区域</option>
+                        <option value="both" selected>倾斜 + 平面</option>
+                    </select>
+                    <small>平面区域与绿色规则同向（按 Y 方向厚度填充）。</small>
+                </label>
+
+                <label>
+                    <span>蓝色平面厚度占比（y &lt; ratio * rows）</span>
+                    <input id="bluePlaneThicknessRatio" type="range" min="0.01" max="0.95" step="0.01" value="0.07" />
+                    <output id="bluePlaneThicknessRatioValue">0.07</output>
+                    <small>仅在蓝色形态含“平面”时生效，数值越大平面越厚。</small>
+                </label>
+
+                <label>
+                    <span>蓝色规则显示模式</span>
+                    <select id="waterRuleModeBlue">
+                        <option value="none">不染色不隐藏</option>
+                        <option value="color" selected>染色不隐藏</option>
+                        <option value="hide">隐藏</option>
+                    </select>
+                    <small>蓝色规则三态：不处理、蓝色标记、直接隐藏。</small>
+                </label>
+
+                <label>
+                    <span>采样步长</span>
+                    <input id="sampleStep" type="range" min="1" max="8" step="1" value="1" />
+                    <output id="sampleStepValue">1</output>
+                    <small>每隔 N 个像素取一个点。越大越流畅，但细节会减少。</small>
+                </label>
+
+                <label>
+                    <span>X 轴间距倍率</span>
+                    <input id="xScale" type="range" min="0.2" max="5" step="0.1" value="1.0" />
+                    <output id="xScaleValue">1.0</output>
+                    <small>仅增大/减小 X 方向体素间距，不改变单体素形状。</small>
+                </label>
+
+                <label>
+                    <span>Y 轴间距倍率</span>
+                    <input id="yScale" type="range" min="0.2" max="5" step="0.1" value="1.0" />
+                    <output id="yScaleValue">1.0</output>
+                    <small>仅增大/减小 Y 方向体素间距，不改变单体素形状。</small>
+                </label>
+
+                <label>
+                    <span>Z 轴间距倍率</span>
+                    <input id="zScale" type="range" min="0.2" max="5" step="0.1" value="1.0" />
+                    <output id="zScaleValue">1.0</output>
+                    <small>仅增大/减小 Z 方向切片间距，不改变单体素形状。</small>
+                </label>
+
+                <label>
+                    <span>视角锁定</span>
+                    <input id="viewLock" type="checkbox" />
+                    <small>锁定后禁止鼠标拖动/缩放相机，便于稳定观察。</small>
+                </label>
+
+                <label>
+                    <span>自动旋转轴</span>
+                    <select id="autoRotateAxis">
+                        <option value="none" selected>关闭</option>
+                        <option value="x">沿 X 轴慢速旋转</option>
+                        <option value="y">沿 Y 轴慢速旋转</option>
+                        <option value="z">沿 Z 轴慢速旋转</option>
+                    </select>
+                    <small>在锁定视角下也可缓慢绕选定轴旋转。</small>
+                </label>
+
+                <label>
+                    <span>最大点数</span>
+                    <input id="maxPoints" type="range" min="50000" max="1000000" step="50000" value="1000000" />
+                    <output id="maxPointsValue">1000000</output>
+                    <small>超过上限会自动稀释采样，优先保证交互流畅度。</small>
+                </label>
+            </div>
+
+            <p id="status" class="status">请先选择目录。</p>
+            <pre id="log" class="log" aria-live="polite">等待任务开始...</pre>
+        </section>
+
+        <section class="viewer-wrap">
+            <nav class="view-tabs" aria-label="视图标签">
+                <button id="tabBtnCloud" class="tab-btn active" data-tab="cloud" type="button">3D 体素</button>
+                <button id="tabBtnGaussian" class="tab-btn" data-tab="gaussian" type="button">高斯点云</button>
+                <button id="tabBtnSlice" class="tab-btn" data-tab="slice" type="button">三向切面</button>
+                <button id="tabBtnXray" class="tab-btn" data-tab="xray" type="button">XRay</button>
+            </nav>
+
+            <div class="axis-legend" aria-label="坐标轴颜色说明（点击可对正视角）">
+                <button class="axis-item axis-x" data-axis-view="x" type="button" title="切换到 X 轴正对视角">X 轴：红色</button>
+                <button class="axis-item axis-y" data-axis-view="y" type="button" title="切换到 Y 轴正对视角">Y 轴：绿色</button>
+                <button class="axis-item axis-z" data-axis-view="z" type="button" title="切换到 Z 轴正对视角">Z 轴：蓝色</button>
+            </div>
+
+            <section id="tabPanelCloud" class="tab-panel active" data-panel="cloud">
+                <canvas id="viewer"></canvas>
+            </section>
+
+            <section id="tabPanelSlice" class="tab-panel" data-panel="slice">
+                <div class="slice-controls">
+                    <label>
+                        <span>XY 切面 (Z 索引)</span>
+                        <input id="zSlice" type="range" min="0" max="0" step="1" value="0" />
+                        <output id="zSliceValue">0</output>
+                        <small>固定 Z，查看 XY 横断面（来自原始体数据）。</small>
+                    </label>
+
+                    <label>
+                        <span>XZ 切面 (Y 索引)</span>
+                        <input id="ySlice" type="range" min="0" max="0" step="1" value="0" />
+                        <output id="ySliceValue">0</output>
+                        <small>固定 Y，查看 XZ 冠状面（来自原始体数据）。</small>
+                    </label>
+
+                    <label>
+                        <span>YZ 切面 (X 索引)</span>
+                        <input id="xSlice" type="range" min="0" max="0" step="1" value="0" />
+                        <output id="xSliceValue">0</output>
+                        <small>固定 X，查看 YZ 矢状面（来自原始体数据）。</small>
+                    </label>
+                </div>
+
+                <section class="slice-grid">
+                    <article class="slice-card">
+                        <h3>XY</h3>
+                        <div class="slice-canvas-wrap">
+                            <canvas id="sliceXY"></canvas>
+                        </div>
+                    </article>
+                    <article class="slice-card">
+                        <h3>XZ</h3>
+                        <div class="slice-canvas-wrap">
+                            <canvas id="sliceXZ"></canvas>
+                        </div>
+                    </article>
+                    <article class="slice-card">
+                        <h3>YZ</h3>
+                        <div class="slice-canvas-wrap">
+                            <canvas id="sliceYZ"></canvas>
+                        </div>
+                    </article>
+                </section>
+            </section>
+
+            <section id="tabPanelXray" class="tab-panel" data-panel="xray">
+                <div class="xray-controls">
+                    <label class="file-picker xray-picker">
+                        <span>加载现有 XRay 图像</span>
+                        <input id="xrayImageInput" type="file" accept="image/*" />
+                    </label>
+                </div>
+
+                <section class="xray-grid">
+                    <article class="slice-card">
+                        <h3>模拟 XRay (Y+ -&gt; Y-, XZ 投影)</h3>
+                        <div class="slice-canvas-wrap">
+                            <canvas id="sliceXrayY"></canvas>
+                        </div>
+                    </article>
+
+                    <article class="slice-card">
+                        <h3>已加载 XRay 图像</h3>
+                        <div class="xray-image-wrap">
+                            <img id="xrayReferenceImg" alt="已加载的XRay图像" />
+                            <p id="xrayReferenceHint" class="xray-hint">尚未加载图像</p>
+                        </div>
+                    </article>
+                </section>
+            </section>
+        </section>
+    </main>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.172.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.172.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script src="bootstrap_cn_v1.js?v=20260414c"></script>
+</body>
+
+</html>

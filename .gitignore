@@ -1,0 +1,49 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Electron-builder & Packaging
+dist/
+release/
+out/
+*.exe
+*.dmg
+*.app
+*.zip
+*.deb
+*.rpm
+
+# IDE / Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python (if using scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Project specific data (Dicom files etc)
+*_clean/
+data/
+logs/
+temp/
+
+# Build artifacts
+build/
+bin/
+obj/
