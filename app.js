@@ -3688,6 +3688,7 @@ if (folderInput) {
 
 const desktopDirBtnRow = document.getElementById("desktopDirBtnRow");
 const selectDesktopDirBtn = document.getElementById("selectDesktopDirBtn");
+const batchProcessBtn = document.getElementById("batchProcessBtn");
 const webDirPicker = document.getElementById("webDirPicker");
 
 if (desktopBridge && desktopDirBtnRow && webDirPicker) {
@@ -3729,6 +3730,124 @@ if (selectDesktopDirBtn && desktopBridge) {
     } catch (err) {
       console.error(err);
       setStatus("读取目录失败: " + err.message);
+    }
+  });
+}
+
+if (batchProcessBtn && desktopBridge) {
+  batchProcessBtn.addEventListener("click", async () => {
+    try {
+      pushLog("请求原生批量目录选择对话框...");
+      setStatusOnly("请选择包含切片存放子文件夹的父目录（将扫描深层文件夹，并自动跳过 _clean 文件夹）。");
+
+      const result = await desktopBridge.findDicomDirectories();
+      if (!result) {
+        pushLog("已取消批量目录选择。");
+        return;
+      }
+
+      const { rootDir, directories } = result;
+      if (!directories || directories.length === 0) {
+         setStatus("未在选定目录下找到任何有效的 DICOM 子文件夹！");
+         return;
+      }
+      
+      pushLog(`=========== 批量任务启动 ===========\n在 ${rootDir} 下共找到 ${directories.length} 个目标子目录。\n开始全自动化流水线处理...`);
+      
+      let successCount = 0;
+      let failCount = 0;
+      const batchLog = [];
+
+      const MAX_WORKERS = navigator.hardwareConcurrency ? Math.max(2, navigator.hardwareConcurrency - 1) : 4;
+      const outputConfig = {
+         bluePatternMode: bluePatternModeSelect?.value || "delete_oblique",
+      };
+      
+      let dirIndex = 0;
+      
+      // Worker function to process one directory
+      async function processDirWorker(dPath, workerId) {
+         const dName = pathBasename(dPath) || "dicom";
+         
+         const rawFiles = await desktopBridge.readDirectoryFiles(dPath);
+         if (!rawFiles || !rawFiles.length) {
+            batchLog.push(`[跳过] ${dName}: (空文件夹/无图像)`);
+            pushLog(`[线程 ${workerId}] 跳过子目录 ${dName} (无有效文件)`);
+            return;
+         }
+         
+         const filesWithBuffers = [];
+         for (const f of rawFiles) {
+             const buf = await desktopBridge.readFile(f.path);
+             // Slice ensures distinct ArrayBuffer if they are pooled
+             const uniqueBuf = buf.slice();
+             filesWithBuffers.push({
+                 name: f.name,
+                 buffer: uniqueBuf.buffer ? uniqueBuf.buffer : uniqueBuf
+             });
+         }
+
+         return new Promise((resolve) => {
+            const worker = new Worker("worker_dicom_batch.js");
+            worker.onmessage = async (e) => {
+               const res = e.data;
+               if (res.success) {
+                  // Export the files natively
+                  const outDir = await desktopBridge.getDefaultOutputDir(dPath);
+                  for (const outf of res.files) {
+                     const bytes = new Uint8Array(outf.buffer);
+                     await desktopBridge.writeDicomFile(outDir, outf.fileName, bytes);
+                  }
+                  batchLog.push(`[成功] ${dName}: (Z比=${res.bestZStartRatio.toFixed(2)}, 角度=${res.bestThetaDeg}°) -> 共输出 ${res.files.length} 张`);
+                  successCount++;
+               } else {
+                  if (res.error && (res.error.includes("非图像DICOM") || res.error.includes("后缀拦截"))) {
+                     batchLog.push(`[跳过] ${dName}: (无有效图像) ${res.error}`);
+                  } else {
+                     batchLog.push(`[异常] ${dName}: Worker 解析失败 - ${res.error}`);
+                     failCount++;
+                  }
+               }
+               worker.terminate();
+               resolve();
+            };
+            
+            worker.onerror = (err) => {
+               batchLog.push(`[异常] ${dName}: Worker 运行崩溃`);
+               failCount++;
+               worker.terminate();
+               resolve();
+            };
+
+            const transferables = filesWithBuffers.map(fb => fb.buffer);
+            worker.postMessage({ files: filesWithBuffers, config: outputConfig }, transferables);
+         });
+      }
+
+      // Worker pool orchestrator
+      async function workerPoolLoop(workerId) {
+          while (dirIndex < directories.length) {
+              const currentIdx = dirIndex++;
+              const dPath = directories[currentIdx];
+              const dName = pathBasename(dPath) || "dicom";
+              setStatusOnly(`[批量进度 ${currentIdx+1}/${directories.length}] (线程${workerId}) 正在处理: ${dName} ...`);
+              await processDirWorker(dPath, workerId);
+          }
+      }
+
+      const poolExecutors = [];
+      for (let i = 0; i < MAX_WORKERS; i++) {
+          poolExecutors.push(workerPoolLoop(i + 1));
+      }
+      
+      await Promise.all(poolExecutors);
+
+      setStatus(`批量无界面多线程执行结束！总计：成功 ${successCount}，失败或跳过 ${directories.length - successCount}。`);
+      pushLog(`============= 批量运行报告 =============\n` + batchLog.join("\n") + `\n========================================`);
+      
+    } catch(err) {
+      console.error(err);
+      setStatus("批量执行遇到致命异常: " + err.message);
     }
   });
 }

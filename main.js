@@ -37,6 +37,84 @@ ipcMain.handle("desktop:readFile", async (_event, filePath) => {
   return await fs.readFile(filePath);
 });
 
+ipcMain.handle("desktop:findDicomDirectories", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ["openDirectory"]
+  });
+  if (canceled || filePaths.length === 0) {
+    return null;
+  }
+
+  const rootDir = filePaths[0];
+
+  async function search(dir) {
+    let result = [];
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      let hasTargetFiles = false;
+      let hasSubDirectories = false;
+      for (const ent of entries) {
+        if (ent.name.startsWith('.') || ent.name.endsWith('_clean') || ent.name === 'node_modules') continue;
+        if (ent.isDirectory()) {
+          hasSubDirectories = true;
+          const subDir = path.join(dir, ent.name);
+          const cleanSibling = `${subDir}_clean`;
+          let hasCleanSibling = false;
+          try {
+            const stat = await fs.stat(cleanSibling);
+            if (stat.isDirectory()) {
+              hasCleanSibling = true;
+            }
+          } catch (e) {
+            // Does not exist
+          }
+
+          if (!hasCleanSibling) {
+            const subResult = await search(subDir);
+            result.push(...subResult);
+          }
+        } else {
+          const ext = path.extname(ent.name).toLowerCase();
+          if (ext === '.dcm') {
+            hasTargetFiles = true;
+          }
+        }
+      }
+      if (hasTargetFiles && !hasSubDirectories) {
+        result.push(dir);
+      }
+    } catch(e) {
+      console.error("Batch search error:", e);
+    }
+    return result;
+  }
+
+  const directories = await search(rootDir);
+  return { rootDir, directories };
+});
+
+ipcMain.handle("desktop:readDirectoryFiles", async (_event, dirPath) => {
+  try {
+    const files = await fs.readdir(dirPath);
+    const result = [];
+    for (const f of files) {
+      const fullPath = path.join(dirPath, f);
+      const stat = await fs.stat(fullPath);
+      if (stat.isFile() && stat.size > 0) {
+        result.push({
+          name: f,
+          path: fullPath,
+          size: stat.size
+        });
+      }
+    }
+    return result;
+  } catch (err) {
+    console.error("Failed to read directory", err);
+    return null;
+  }
+});
+
 function sanitizeFileName(name) {
   const base = path.basename(String(name || "")).trim();
   if (!base) {

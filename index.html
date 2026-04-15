@@ -17,8 +17,9 @@
             <h1>3D 断层超声点云</h1>
             <p class="subtitle">选择同一目录下的全部 DICOM 文件，自动重建并可交互查看点云。</p>
 
-            <div class="action-row" id="desktopDirBtnRow" style="display: none; margin-bottom: 12px;">
+            <div class="action-row" id="desktopDirBtnRow" style="display: none; margin-bottom: 12px; gap: 8px;">
                 <button id="selectDesktopDirBtn" class="action-btn" type="button">选择 DICOM 目录</button>
+                <button id="batchProcessBtn" class="action-btn" type="button" style="background-color: #f39c12; color: #fff;">批量选择父目录 (全自动处理)</button>
             </div>
 
             <label class="file-picker" id="webDirPicker">

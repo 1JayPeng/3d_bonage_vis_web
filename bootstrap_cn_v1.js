@@ -86,6 +86,7 @@
       });
 
       await loadWithFallback("dicom-parser", [
+        "dicomParser.min.js",
         "https://unpkg.com/dicom-parser@1.8.21/dist/dicomParser.min.js"
       ]);
 

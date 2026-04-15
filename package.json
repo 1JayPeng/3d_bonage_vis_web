@@ -21,7 +21,9 @@
             "app.js",
             "bootstrap_cn_v1.js",
             "main.js",
-            "preload.js"
+            "preload.js",
+            "dicomParser.min.js",
+            "worker_dicom_batch.js"
         ],
         "directories": {
             "output": "release"
