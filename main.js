@@ -58,21 +58,8 @@ ipcMain.handle("desktop:findDicomDirectories", async () => {
         if (ent.isDirectory()) {
           hasSubDirectories = true;
           const subDir = path.join(dir, ent.name);
-          const cleanSibling = `${subDir}_clean`;
-          let hasCleanSibling = false;
-          try {
-            const stat = await fs.stat(cleanSibling);
-            if (stat.isDirectory()) {
-              hasCleanSibling = true;
-            }
-          } catch (e) {
-            // Does not exist
-          }
-
-          if (!hasCleanSibling) {
-            const subResult = await search(subDir);
-            result.push(...subResult);
-          }
+          const subResult = await search(subDir);
+          result.push(...subResult);
         } else {
           const ext = path.extname(ent.name).toLowerCase();
           if (ext === '.dcm') {
@@ -159,6 +146,13 @@ ipcMain.handle("desktop:getDefaultOutputDir", async (_event, sourceFolderPath) =
   const parentDir = path.dirname(sourceDir);
   const folderName = path.basename(sourceDir);
   return path.join(parentDir, `${folderName}_clean`);
+});
+
+ipcMain.handle("desktop:prepareOutputDir", async (_event, outputDir) => {
+  const normalized = ensureAbsoluteDir(outputDir);
+  await fs.rm(normalized, { recursive: true, force: true });
+  await fs.mkdir(normalized, { recursive: true });
+  return normalized;
 });
 
 ipcMain.handle("desktop:writeDicomFile", async (_event, payload) => {

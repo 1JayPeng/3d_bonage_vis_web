@@ -19,7 +19,8 @@
 
             <div class="action-row" id="desktopDirBtnRow" style="display: none; margin-bottom: 12px; gap: 8px;">
                 <button id="selectDesktopDirBtn" class="action-btn" type="button">选择 DICOM 目录</button>
-                <button id="batchProcessBtn" class="action-btn" type="button" style="background-color: #f39c12; color: #fff;">批量选择父目录 (全自动处理)</button>
+                <button id="batchProcessBtn" class="action-btn" type="button"
+                    style="background-color: #f39c12; color: #fff;">批量选择父目录 (全自动处理)</button>
             </div>
 
             <label class="file-picker" id="webDirPicker">
@@ -49,8 +50,8 @@
                 <label>
                     <span>Y 规则显示模式</span>
                     <select id="waterRuleModeY">
-                        <option value="none">不染色不隐藏</option>
-                        <option value="color" selected>染色不隐藏</option>
+                        <option value="none" selected>不染色不隐藏</option>
+                        <option value="color">染色不隐藏</option>
                         <option value="hide">隐藏</option>
                     </select>
                     <small>Y 规则三态：不处理、绿色标记、直接隐藏。</small>
@@ -66,8 +67,8 @@
                 <label>
                     <span>X 规则显示模式</span>
                     <select id="waterRuleModeX">
-                        <option value="none">不染色不隐藏</option>
-                        <option value="color" selected>染色不隐藏</option>
+                        <option value="none" selected>不染色不隐藏</option>
+                        <option value="color">染色不隐藏</option>
                         <option value="hide">隐藏</option>
                     </select>
                     <small>X 规则三态：不处理、红色标记、直接隐藏。</small>
@@ -86,7 +87,8 @@
                 <label style="align-items: flex-start;">
                     <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
                         <span>蓝色斜向染色角度（从 +Z 向 +Y 偏转）</span>
-                        <button id="autoDetectObliqueBtn" class="action-btn" type="button" style="padding: 2px 8px; font-size: 12px; margin-bottom: 4px;">自动检测</button>
+                        <button id="autoDetectObliqueBtn" class="action-btn" type="button"
+                            style="padding: 2px 8px; font-size: 12px; margin-bottom: 4px;">自动检测</button>
                     </div>
                     <input id="obliqueAngleDeg" type="range" min="0" max="89" step="1" value="51" />
                     <output id="obliqueAngleDegValue">51°</output>
@@ -120,8 +122,8 @@
                 <label>
                     <span>蓝色规则显示模式</span>
                     <select id="waterRuleModeBlue">
-                        <option value="none">不染色不隐藏</option>
-                        <option value="color" selected>染色不隐藏</option>
+                        <option value="none" selected>不染色不隐藏</option>
+                        <option value="color">染色不隐藏</option>
                         <option value="hide">隐藏</option>
                     </select>
                     <small>蓝色规则三态：不处理、蓝色标记、直接隐藏。</small>

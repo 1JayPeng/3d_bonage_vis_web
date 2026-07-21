@@ -667,6 +667,16 @@ function summarizeReasonMap(reasonMap, limit = 5) {
     .join("；");
 }
 
+function adjustAutoDetectedObliqueParameters(bestZStartRatio, bestThetaDeg, depth) {
+  const safeDepth = Math.max(1, Math.floor(Number(depth) || 1));
+  const detectedZStart = Math.max(0, Math.min(safeDepth - 1, Math.floor(safeDepth * Number(bestZStartRatio || 0))));
+  const adjustedZStart = Math.min(safeDepth - 1, detectedZStart + 1);
+  return {
+    obliqueStartZRatio: adjustedZStart / safeDepth,
+    obliqueAngleDeg: Math.min(89, Number(bestThetaDeg || 0) + 1),
+  };
+}
+
 function getWaterSurfaceConfig() {
   const modeY = waterRuleModeYSelect?.value;
   const modeX = waterRuleModeXSelect?.value;
@@ -682,10 +692,20 @@ function getWaterSurfaceConfig() {
     bluePatternMode: bluePatternMode === "oblique" || bluePatternMode === "plane" || bluePatternMode === "both"
       ? bluePatternMode
       : "both",
-    ruleModeY: modeY === "none" || modeY === "hide" || modeY === "color" ? modeY : "color",
-    ruleModeX: modeX === "none" || modeX === "hide" || modeX === "color" ? modeX : "color",
-    ruleModeBlue: modeBlue === "none" || modeBlue === "hide" || modeBlue === "color" ? modeBlue : "color",
+    ruleModeY: modeY === "none" || modeY === "hide" || modeY === "color" ? modeY : "none",
+    ruleModeX: modeX === "none" || modeX === "hide" || modeX === "color" ? modeX : "none",
+    ruleModeBlue: modeBlue === "none" || modeBlue === "hide" || modeBlue === "color" ? modeBlue : "none",
     conflictMode: conflictMode === "x" || conflictMode === "y" || conflictMode === "mix" ? conflictMode : "mix",
+  };
+}
+
+function getProcessingWaterSurfaceConfig() {
+  const config = getWaterSurfaceConfig();
+  return {
+    ...config,
+    ruleModeY: config.ruleModeY === "none" ? "color" : config.ruleModeY,
+    ruleModeX: config.ruleModeX === "none" ? "color" : config.ruleModeX,
+    ruleModeBlue: config.ruleModeBlue === "none" ? "color" : config.ruleModeBlue,
   };
 }
 
@@ -1006,7 +1026,7 @@ async function autoDetectObliqueLineY() {
         }
       }
 
-      if (count > zStart * 0.4) {
+      if (count > zStart * 0.25) {
         const avgScore = score / count;
         const finalScore = avgScore * Math.sqrt(count);
 
@@ -1019,14 +1039,18 @@ async function autoDetectObliqueLineY() {
     }
   }
 
-  pushLog(`自动检测完成：Z 占比=${bestZStartRatio.toFixed(2)}，角度=${bestThetaDeg}°，得分=${bestScore.toFixed(2)}`);
+  const adjusted = adjustAutoDetectedObliqueParameters(bestZStartRatio, bestThetaDeg, loadedSlices.length);
+  pushLog(
+    `自动检测完成：Z 占比=${bestZStartRatio.toFixed(2)} -> ${adjusted.obliqueStartZRatio.toFixed(2)}，`
+    + `角度=${bestThetaDeg}° -> ${adjusted.obliqueAngleDeg}°，得分=${bestScore.toFixed(2)}`,
+  );
 
   if (obliqueStartZRatioInput) {
-    obliqueStartZRatioInput.value = bestZStartRatio;
+    obliqueStartZRatioInput.value = adjusted.obliqueStartZRatio;
     obliqueStartZRatioInput.dispatchEvent(new Event("input"));
   }
   if (obliqueAngleDegInput) {
-    obliqueAngleDegInput.value = bestThetaDeg;
+    obliqueAngleDegInput.value = adjusted.obliqueAngleDeg;
     obliqueAngleDegInput.dispatchEvent(new Event("input"));
   }
 
@@ -1957,7 +1981,7 @@ async function startWaterSurfaceDetectionAsync() {
   waterDetectionScheduled = false;
   const runId = waterDetectionTaskId + 1;
   waterDetectionTaskId = runId;
-  const cfg = getWaterSurfaceConfig();
+  const cfg = getProcessingWaterSurfaceConfig();
 
   setStatusOnly("体素已完成，后台正在按规则标记体素（不阻塞交互）...");
   const result = await applyRuleBasedWaterMaskAsync(loadedSlices, cfg, runId);
@@ -3759,9 +3783,7 @@ if (batchProcessBtn && desktopBridge) {
       const batchLog = [];
 
       const MAX_WORKERS = navigator.hardwareConcurrency ? Math.max(2, navigator.hardwareConcurrency - 1) : 4;
-      const outputConfig = {
-         bluePatternMode: bluePatternModeSelect?.value || "delete_oblique",
-      };
+      const outputConfig = getProcessingWaterSurfaceConfig();
       
       let dirIndex = 0;
       
@@ -3779,11 +3801,11 @@ if (batchProcessBtn && desktopBridge) {
          const filesWithBuffers = [];
          for (const f of rawFiles) {
              const buf = await desktopBridge.readFile(f.path);
-             // Slice ensures distinct ArrayBuffer if they are pooled
-             const uniqueBuf = buf.slice();
+           const uint8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+           const uniqueBuf = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
              filesWithBuffers.push({
                  name: f.name,
-                 buffer: uniqueBuf.buffer ? uniqueBuf.buffer : uniqueBuf
+             buffer: uniqueBuf
              });
          }
 
@@ -3794,6 +3816,7 @@ if (batchProcessBtn && desktopBridge) {
                if (res.success) {
                   // Export the files natively
                   const outDir = await desktopBridge.getDefaultOutputDir(dPath);
+                await desktopBridge.prepareOutputDir(outDir);
                   for (const outf of res.files) {
                      const bytes = new Uint8Array(outf.buffer);
                      await desktopBridge.writeDicomFile(outDir, outf.fileName, bytes);
