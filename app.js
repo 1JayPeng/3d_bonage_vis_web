@@ -3897,7 +3897,7 @@ async function bootstrapApp() {
     }
     pushLog(`[版本] app.js ${APP_BUILD}`);
     pushLog(
-      `[控件挂载] ruleY=${Boolean(waterBandRatioInput)} mode=${Boolean(waterRuleModeSelect)}（聚类控件已隐藏）`,
+      `[控件挂载] ruleY=${Boolean(waterBandRatioInput)} modeY=${Boolean(waterRuleModeYSelect)} modeX=${Boolean(waterRuleModeXSelect)} modeBlue=${Boolean(waterRuleModeBlueSelect)}`,
     );
     switchTab("cloud");
   } catch (err) {
