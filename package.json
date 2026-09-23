@@ -8,6 +8,9 @@
         "start": "electron .",
         "dist:win": "electron-builder --win --x64"
     },
+    "dependencies": {
+        "three": "0.172.0"
+    },
     "devDependencies": {
         "electron": "^32.2.7",
         "electron-builder": "^24.13.3"
@@ -23,7 +26,8 @@
             "main.js",
             "preload.js",
             "dicomParser.min.js",
-            "worker_dicom_batch.js"
+            "worker_dicom_batch.js",
+            "node_modules/three/**"
         ],
         "directories": {
             "output": "release"
