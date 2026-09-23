@@ -91,7 +91,7 @@
       ]);
 
       setStatus("依赖加载完成，正在启动应用...");
-      await loadModule("./app.js?v=20260414c");
+      await loadModule("./app.js");
 
       const booted = await waitForAppBoot(15000);
       if (!booted) {
