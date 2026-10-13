@@ -1,5 +1,11 @@
 import * as THREE from "three";
 import { TrackballControls } from "three/addons/controls/TrackballControls.js";
+import {
+  createMaskedNiftiArrayBuffer,
+  decodeNiftiFile,
+  getNiftiDisplayLabel,
+  isNiftiFile,
+} from "./nifti_adapter.js";
 
 window.__APP_BOOTED__ = true;
 window.dispatchEvent(new Event("app-booted"));
@@ -7,6 +13,12 @@ window.dispatchEvent(new Event("app-booted"));
 const dicomParser = window.dicomParser;
 
 const folderInput = document.getElementById("folderInput");
+const niftiInput = document.getElementById("niftiInput");
+const niftiDatasetSelect = document.getElementById("niftiDatasetSelect");
+const niftiDilationInput = document.getElementById("niftiDilationInput");
+const niftiDilationValue = document.getElementById("niftiDilationValue");
+const applyNiftiDilationBtn = document.getElementById("applyNiftiDilationBtn");
+const exportNiftiMaskedBtn = document.getElementById("exportNiftiMaskedBtn");
 const thresholdInput = document.getElementById("threshold");
 const thresholdValue = document.getElementById("thresholdValue");
 const sampleStepInput = document.getElementById("sampleStep");
@@ -579,10 +591,17 @@ let currentVolumeMesh = null;
 let currentVolumeMaterial = null;
 let currentVolumeTexture = null;
 let currentWaterMaskTexture = null;
+let currentNiftiMaskMeshes = [];
 let currentGaussianPoints = null;
 let currentGaussianMaterial = null;
 let loadedSourceFolderName = "";
 let loadedSourceFolderPath = "";
+let loadedVolumeSourceType = "dicom";
+const niftiVolumes = new Map();
+let activeNiftiLabel = "";
+let niftiDilationRadius = 2;
+let niftiDilationMaskSlices = null;
+let niftiOverlayRevision = 0;
 let gaussianBuildRevision = -1;
 let gaussianBuildSampleStep = -1;
 let gaussianBuildMaxPoints = -1;
@@ -883,7 +902,10 @@ function getParseConcurrency() {
 
 function updateExportButtonState() {
   if (exportDicomBtn) {
-    exportDicomBtn.disabled = !loadedSlices.length || waterDetectionInProgress || waterDetectionScheduled;
+    exportDicomBtn.disabled = loadedVolumeSourceType !== "dicom"
+      || !loadedSlices.length
+      || waterDetectionInProgress
+      || waterDetectionScheduled;
   }
 }
 
@@ -1819,7 +1841,7 @@ async function detectWaterSurfaceByDbscanAsync(slices, config, runId) {
 }
 
 function scheduleWaterSurfaceDetection(immediate = false) {
-  if (!loadedSlices.length) return;
+  if (loadedVolumeSourceType !== "dicom" || !loadedSlices.length) return;
 
   waterDetectionScheduled = true;
   if (immediate) {
@@ -2063,11 +2085,141 @@ function computeVolumeBounds(slices, xScale, yScale, zScale) {
   const rows = first.rows;
   const cols = first.cols;
   const zSpacing = estimateZSpacing(slices);
+  const xExtent = cols * first.spacingX;
+  const yExtent = rows * first.spacingY;
+  const zExtent = depth * zSpacing;
+  const niftiDisplayZScale = loadedVolumeSourceType === "nifti"
+    ? Math.max(1, Math.max(xExtent, yExtent) / Math.max(1e-6, zExtent))
+    : 1;
   return {
-    x: cols * first.spacingX * xScale,
-    y: rows * first.spacingY * yScale,
-    z: depth * zSpacing * zScale,
+    x: xExtent * xScale,
+    y: yExtent * yScale,
+    z: zExtent * zScale * niftiDisplayZScale,
   };
+}
+
+function isNiftiMaskDisplay() {
+  return loadedVolumeSourceType === "nifti" && (activeNiftiLabel === "gt" || activeNiftiLabel === "pred");
+}
+
+function clearNiftiMaskRender() {
+  for (const mesh of currentNiftiMaskMeshes) {
+    scene.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  }
+  currentNiftiMaskMeshes = [];
+}
+
+function createNiftiMaskMesh(slices, label, color, maskSlices = null) {
+  const first = slices[0];
+  const depth = slices.length;
+  const rows = first.rows;
+  const cols = first.cols;
+  const xScale = Number(xScaleInput?.value || 1);
+  const yScale = Number(yScaleInput?.value || 1);
+  const zScale = Number(zScaleInput?.value || 1);
+  const zSpacing = estimateZSpacing(loadedSlices);
+  const xExtent = cols * first.spacingX;
+  const yExtent = rows * first.spacingY;
+  const zExtent = depth * zSpacing;
+  const displayZScale = Math.max(1, Math.max(xExtent, yExtent) / Math.max(1e-6, zExtent));
+  const voxelSize = {
+    x: first.spacingX * xScale,
+    y: first.spacingY * yScale,
+    z: zSpacing * zScale * displayZScale,
+  };
+  const positiveVoxels = [];
+  for (let z = 0; z < depth; z += 1) {
+    const pixels = slices[z].pixels;
+    const maskPixels = maskSlices?.[z];
+    for (let y = 0; y < rows; y += 1) {
+      const rowOffset = y * cols;
+      for (let x = 0; x < cols; x += 1) {
+        const value = maskPixels ? maskPixels[rowOffset + x] : pixels[rowOffset + x];
+        if (value > 0.5) positiveVoxels.push({ x, y, z });
+      }
+    }
+  }
+
+  if (!positiveVoxels.length) return null;
+
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const material = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.72,
+    metalness: 0.04,
+    transparent: true,
+    opacity: 0.64,
+    depthWrite: false,
+  });
+  const mesh = new THREE.InstancedMesh(geometry, material, positiveVoxels.length);
+  const instance = new THREE.Object3D();
+  for (let index = 0; index < positiveVoxels.length; index += 1) {
+    const voxel = positiveVoxels[index];
+    instance.position.set(
+      (cols / 2 - voxel.x - 0.5) * voxelSize.x,
+      (rows / 2 - voxel.y - 0.5) * voxelSize.y,
+      (depth / 2 - voxel.z - 0.5) * voxelSize.z,
+    );
+    instance.scale.set(voxelSize.x, voxelSize.y, voxelSize.z);
+    instance.updateMatrix();
+    mesh.setMatrixAt(index, instance.matrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.renderOrder = label === "pred" ? 3 : 2;
+  return { mesh, count: positiveVoxels.length, xExtent, yExtent, zExtent, displayZScale };
+}
+
+function rebuildNiftiMaskRendering() {
+  if (!loadedSlices.length) return false;
+  clearVolumeRender();
+  clearPointCloud();
+  clearGaussianRender();
+
+  const result = createNiftiMaskMesh(
+    loadedSlices,
+    activeNiftiLabel,
+    activeNiftiLabel === "pred" ? 0xff4d6d : 0x45e0a3,
+  );
+  if (!result) {
+    setStatus(`NIfTI ${activeNiftiLabel} 没有检测到前景体素。`);
+    return true;
+  }
+  currentNiftiMaskMeshes = [result.mesh];
+  currentBounds = {
+    x: result.xExtent * Number(xScaleInput?.value || 1),
+    y: result.yExtent * Number(yScaleInput?.value || 1),
+    z: result.zExtent * Number(zScaleInput?.value || 1) * result.displayZScale,
+  };
+  scene.add(result.mesh);
+  refitCamera();
+  pushLog(`NIfTI ${activeNiftiLabel} 使用实体体素渲染：${result.count.toLocaleString()} 个前景体素，Z 视觉补偿 x${result.displayZScale.toFixed(1)}。`);
+  return true;
+}
+
+function rebuildNiftiOverlayRendering() {
+  const gt = niftiVolumes.get("gt");
+  const pred = niftiVolumes.get("pred");
+  if (!gt || !pred) return;
+
+  clearNiftiMaskRender();
+  const gtResult = createNiftiMaskMesh(gt.slices, "gt", 0x45e0a3);
+  const predResult = createNiftiMaskMesh(
+    pred.slices,
+    "pred",
+    0xff4d6d,
+    niftiDilationMaskSlices,
+  );
+  for (const result of [gtResult, predResult]) {
+    if (!result) continue;
+    currentNiftiMaskMeshes.push(result.mesh);
+    scene.add(result.mesh);
+  }
+  pushLog(
+    `NIfTI 叠加显示：GT=${gtResult?.count?.toLocaleString() || 0}，`
+    + `Pred=${predResult?.count?.toLocaleString() || 0} 个前景体素。`,
+  );
 }
 
 function clearVolumeRender() {
@@ -2089,6 +2241,7 @@ function clearVolumeRender() {
     currentWaterMaskTexture.dispose();
     currentWaterMaskTexture = null;
   }
+  clearNiftiMaskRender();
 
   // Clearing the volume resources must also invalidate the texture revision.
   // Otherwise switching back from Gaussian mode may reuse a null texture.
@@ -2396,6 +2549,10 @@ function applyVolumeScaleImmediate() {
 
 function rebuildVolumeRendering() {
   if (!loadedSlices.length) return false;
+  if (isNiftiMaskDisplay()) {
+    return rebuildNiftiMaskRendering();
+  }
+  clearNiftiMaskRender();
   if (!supportsGpuVolumeRendering()) {
     pushLog("当前浏览器 GPU 体渲染能力不可用，已回退到点云模式。");
     return false;
@@ -2458,6 +2615,9 @@ function rebuildVolumeRendering() {
   clearPointCloud();
   clearGaussianRender();
   updateVolumeUniformsAndScale(loadedSlices);
+  if (activeNiftiLabel === "overlay") {
+    rebuildNiftiOverlayRendering();
+  }
   if (createdNow || volumeTextureRevision === volumeDataRevision) {
     // Keep camera stable during scale tweaks so axis stretch is visually obvious.
     if (createdNow) {
@@ -3038,7 +3198,8 @@ function drawSliceToCanvas(
     offscreen.height = height;
   }
 
-  if (resized || textureState.token !== sliceToken) {
+  const overlayToken = `${sliceToken}|nifti-overlay:${niftiOverlayRevision}`;
+  if (resized || textureState.token !== overlayToken) {
     const offCtx = offscreen.getContext("2d");
     const imageData = offCtx.createImageData(width, height);
     const data = imageData.data;
@@ -3070,12 +3231,21 @@ function drawSliceToCanvas(
           data[p + 1] = gray;
           data[p + 2] = gray;
         }
+        const overlay = key === "XY" || key === "XZ" || key === "YZ"
+          ? getNiftiOverlayColor(key, x, y)
+          : null;
+        if (overlay) {
+          const alpha = overlay.alpha;
+          data[p] = Math.round(data[p] * (1 - alpha) + overlay.r * 255 * alpha);
+          data[p + 1] = Math.round(data[p + 1] * (1 - alpha) + overlay.g * 255 * alpha);
+          data[p + 2] = Math.round(data[p + 2] * (1 - alpha) + overlay.b * 255 * alpha);
+        }
         data[p + 3] = 255;
         p += 4;
       }
     }
     offCtx.putImageData(imageData, 0, 0);
-    textureState.token = sliceToken;
+    textureState.token = overlayToken;
   }
 
   ctx.save();
@@ -3609,9 +3779,77 @@ function scheduleRebuild() {
   }, 240);
 }
 
+function getNiftiOverlayColor(viewKey, viewX, viewY) {
+  if (activeNiftiLabel !== "overlay" || !["XY", "XZ", "YZ"].includes(viewKey)) return null;
+  const image = niftiVolumes.get("image");
+  const gt = niftiVolumes.get("gt");
+  const pred = niftiVolumes.get("pred");
+  if (!image || !gt || !pred) return null;
+
+  let x = viewX;
+  let y = viewY;
+  let z = mprIndex.z;
+  if (viewKey === "XZ") {
+    z = viewY;
+    y = mprIndex.y;
+  } else if (viewKey === "YZ") {
+    z = viewX;
+    x = mprIndex.x;
+  }
+  if (x < 0 || x >= image.cols || y < 0 || y >= image.rows || z < 0 || z >= image.depth) return null;
+  const index = y * image.cols + x;
+  const gtHit = gt.slices[z]?.pixels[index] > 0.5;
+  const predHit = pred.slices[z]?.pixels[index] > 0.5;
+  const dilatedHit = niftiDilationMaskSlices?.[z]?.[index] > 0;
+  const expandedHit = dilatedHit && !predHit;
+  if (!gtHit && !predHit && !expandedHit) return null;
+
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let layers = 0;
+  if (gtHit) {
+    red += 0.18;
+    green += 0.95;
+    blue += 0.45;
+    layers += 1;
+  }
+  if (predHit) {
+    red += 1;
+    green += 0.18;
+    blue += 0.35;
+    layers += 1;
+  }
+  if (expandedHit) {
+    red += 1;
+    green += 0.72;
+    blue += 0.08;
+    layers += 1;
+  }
+  return { r: red / layers, g: green / layers, b: blue / layers, alpha: 0.62 };
+}
+
+function createNiftiMaskedSlices(volume, maskSlices) {
+  if (!volume || !maskSlices || maskSlices.length !== volume.depth) return volume?.slices || [];
+  return volume.slices.map((slice, z) => {
+    const mask = maskSlices[z];
+    const pixels = new Float32Array(slice.pixels.length);
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < pixels.length; index += 1) {
+      const value = mask[index] > 0 ? slice.pixels[index] : 0;
+      pixels[index] = value;
+      min = Math.min(min, value);
+      max = Math.max(max, value);
+    }
+    return { ...slice, pixels, min, max };
+  });
+}
+
 if (folderInput) {
 async function executeDirectoryProcessing(files, dirName, dirPath) {
   try {
+    loadedVolumeSourceType = "dicom";
     loadedSourceFolderName = dirName;
     loadedSourceFolderPath = dirPath;
     if (loadedSourceFolderPath) {
@@ -3688,10 +3926,239 @@ async function executeDirectoryProcessing(files, dirName, dirPath) {
   }
 }
 
+function buildPredDilationMask(radius) {
+  const pred = niftiVolumes.get("pred");
+  if (!pred) return null;
+  const safeRadius = Math.max(0, Math.min(12, Math.round(Number(radius) || 0)));
+  const offsets = [];
+  for (let dy = -safeRadius; dy <= safeRadius; dy += 1) {
+    for (let dx = -safeRadius; dx <= safeRadius; dx += 1) {
+      if (dx * dx + dy * dy <= safeRadius * safeRadius) offsets.push([dx, dy]);
+    }
+  }
+
+  const rows = pred.rows;
+  const cols = pred.cols;
+  const result = [];
+  for (let z = 0; z < pred.depth; z += 1) {
+    const source = pred.slices[z].pixels;
+    const dilated = new Uint8Array(rows * cols);
+    for (let y = 0; y < rows; y += 1) {
+      for (let x = 0; x < cols; x += 1) {
+        if (source[y * cols + x] <= 0.5) continue;
+        for (const [dx, dy] of offsets) {
+          const targetX = x + dx;
+          const targetY = y + dy;
+          if (targetX >= 0 && targetX < cols && targetY >= 0 && targetY < rows) {
+            dilated[targetY * cols + targetX] = 1;
+          }
+        }
+      }
+    }
+    result.push(dilated);
+  }
+  return result;
+}
+
+function getNiftiMaskValue(slices, x, y, z, cols) {
+  const slice = slices?.[z];
+  if (!slice || x < 0 || y < 0 || z < 0 || x >= cols || y >= slice.rows) return 0;
+  return slice.pixels[y * cols + x] > 0.5 ? 1 : 0;
+}
+
+function applyNiftiDilation() {
+  if (!niftiVolumes.has("pred")) {
+    setStatus("请先加载包含 pred 的 NIfTI 数据。");
+    return;
+  }
+  niftiDilationRadius = Math.max(0, Math.min(12, Number(niftiDilationInput?.value || 0)));
+  niftiDilationMaskSlices = buildPredDilationMask(niftiDilationRadius);
+  niftiOverlayRevision += 1;
+  renderActiveMprViews();
+  if (activeNiftiLabel === "masked") {
+    installNiftiVolume("masked");
+  } else if (activeNiftiLabel === "overlay" || activeNiftiLabel === "pred") {
+    scheduleRebuild();
+  }
+  setStatus(`Pred XY 膨胀已应用：半径 ${niftiDilationRadius} 像素。`);
+}
+
+function updateNiftiExportButtonState() {
+  if (exportNiftiMaskedBtn) {
+    exportNiftiMaskedBtn.disabled = !niftiVolumes.has("image") || !niftiVolumes.has("pred");
+  }
+}
+
+async function exportNiftiMaskedImage() {
+  const image = niftiVolumes.get("image");
+  if (!image?.sourceFile || !niftiVolumes.has("pred")) {
+    setStatus("请先加载 image 和 pred NIfTI 文件。");
+    return;
+  }
+  if (!niftiDilationMaskSlices) {
+    niftiDilationMaskSlices = buildPredDilationMask(niftiDilationRadius);
+  }
+  try {
+    setStatus("正在导出 Pred 区域保留版原图...");
+    const buffer = await createMaskedNiftiArrayBuffer(image.sourceFile, niftiDilationMaskSlices);
+    const baseName = image.fileName.replace(/\.nii\.gz$/i, "").replace(/\.nii$/i, "");
+    triggerFileDownload(
+      new Blob([buffer], { type: "application/octet-stream" }),
+      `${baseName}_pred_dilated_masked.nii`,
+    );
+    setStatus("Pred 区域保留版原图已导出。 ");
+  } catch (error) {
+    setStatus(`NIfTI 导出失败：${error?.message || String(error)}`);
+  }
+}
+
+function updateNiftiDatasetOptions(selectedLabel = "") {
+  if (!niftiDatasetSelect) return;
+  niftiDatasetSelect.replaceChildren();
+  const availableLabels = Array.from(niftiVolumes.keys());
+  const hasImage = niftiVolumes.has("image");
+  const hasGt = niftiVolumes.has("gt");
+  const hasPred = niftiVolumes.has("pred");
+  pushLog(`[NIfTI] 已识别数据集：${availableLabels.join(", ") || "无"}`);
+  if (hasImage && hasGt && hasPred) {
+    const overlayOption = document.createElement("option");
+    overlayOption.value = "overlay";
+    overlayOption.textContent = "原图 + GT + Pred（叠加）";
+    overlayOption.selected = selectedLabel === "overlay";
+    niftiDatasetSelect.appendChild(overlayOption);
+    const maskedOption = document.createElement("option");
+    maskedOption.value = "masked";
+    maskedOption.textContent = "Pred 膨胀区域保留原图";
+    maskedOption.selected = selectedLabel === "masked";
+    niftiDatasetSelect.appendChild(maskedOption);
+  } else {
+    pushLog(`[NIfTI] 叠加选项不可用：image=${hasImage}, gt=${hasGt}, pred=${hasPred}`);
+  }
+  for (const [label, volume] of niftiVolumes) {
+    const option = document.createElement("option");
+    option.value = label;
+    option.textContent = `${label}（${volume.fileName}）`;
+    option.selected = label === selectedLabel;
+    niftiDatasetSelect.appendChild(option);
+  }
+  niftiDatasetSelect.disabled = niftiVolumes.size <= 1;
+}
+
+function installNiftiVolume(label) {
+  const sourceLabel = label === "overlay" || label === "masked" ? "image" : label;
+  const volume = niftiVolumes.get(sourceLabel);
+  if (!volume) return;
+
+  loadedVolumeSourceType = "nifti";
+  activeNiftiLabel = label;
+  niftiOverlayRevision += 1;
+  loadedSourceFolderName = volume.stem || label;
+  loadedSourceFolderPath = "";
+  if (label === "masked") {
+    niftiDilationMaskSlices = niftiDilationMaskSlices || buildPredDilationMask(niftiDilationRadius);
+    loadedSlices = createNiftiMaskedSlices(volume, niftiDilationMaskSlices);
+  } else {
+    loadedSlices = volume.slices;
+  }
+  volumeDataRevision += 1;
+  volumeTextureRevision = -1;
+  gaussianBuildRevision = -1;
+  gaussianBuildSampleStep = -1;
+  gaussianBuildMaxPoints = -1;
+  gaussianBuildRuleModeY = "none";
+  gaussianBuildRuleModeX = "none";
+  gaussianBuildRuleModeBlue = "none";
+  gaussianBuildWaterMaskRevision = -1;
+  volumeWaterMaskRevision = -1;
+  waterDetectionTaskId += 1;
+  waterDetectionScheduled = false;
+  waterDetectionInProgress = false;
+  resetWaterMask(loadedSlices);
+  updateGlobalRangeFromSlices(loadedSlices);
+  updateRenderRangeFromSlices(loadedSlices);
+  updateSliceControlRanges();
+  renderActiveMprViews();
+  updateExportButtonState();
+  rebuildPointCloud();
+  setStatus(`NIfTI 已加载：${volume.fileName}，${volume.cols}×${volume.rows}×${volume.depth}。`);
+  pushLog(`NIfTI 显示源：${label}，已跳过 DICOM 预扫描、规则检测和导出逻辑。`);
+}
+
+async function loadNiftiFiles(files) {
+  const niftiFiles = files.filter(isNiftiFile);
+  if (!niftiFiles.length) {
+    setStatus("未检测到 .nii 或 .nii.gz 文件。");
+    return;
+  }
+
+  niftiVolumes.clear();
+  setStatus(`正在解码 NIfTI：0/${niftiFiles.length}...`);
+  for (let index = 0; index < niftiFiles.length; index += 1) {
+    const file = niftiFiles[index];
+    try {
+      const volume = await decodeNiftiFile(file);
+      const baseLabel = getNiftiDisplayLabel(file);
+      let label = baseLabel;
+      let duplicateIndex = 2;
+      while (niftiVolumes.has(label)) {
+        label = `${baseLabel}-${duplicateIndex}`;
+        duplicateIndex += 1;
+      }
+      niftiVolumes.set(label, volume);
+      pushLog(`NIfTI 解码完成：${file.name} -> ${volume.cols}×${volume.rows}×${volume.depth}`);
+    } catch (error) {
+      pushLog(`NIfTI 解码失败：${file.name} -> ${error?.message || String(error)}`);
+    }
+    setStatus(`正在解码 NIfTI：${index + 1}/${niftiFiles.length}...`);
+    await yieldToUi();
+  }
+
+  if (!niftiVolumes.size) {
+    setStatus("没有成功解码的 NIfTI 体数据，请检查文件格式。");
+    return;
+  }
+
+  niftiDilationMaskSlices = buildPredDilationMask(niftiDilationRadius);
+  niftiOverlayRevision += 1;
+  updateNiftiExportButtonState();
+  const preferredLabel = niftiVolumes.has("image") ? "image" : niftiVolumes.keys().next().value;
+  updateNiftiDatasetOptions(preferredLabel);
+  installNiftiVolume(preferredLabel);
+}
+
+if (niftiInput) {
+  niftiInput.addEventListener("change", async (event) => {
+    const files = Array.from(event.target.files || []).filter((file) => file.size > 0);
+    await loadNiftiFiles(files);
+  });
+}
+
+if (niftiDatasetSelect) {
+  niftiDatasetSelect.addEventListener("change", () => {
+    installNiftiVolume(niftiDatasetSelect.value);
+  });
+}
+
+if (niftiDilationInput && niftiDilationValue) {
+  niftiDilationInput.addEventListener("input", () => {
+    niftiDilationValue.textContent = `${niftiDilationInput.value} 像素`;
+  });
+}
+
+if (applyNiftiDilationBtn) {
+  applyNiftiDilationBtn.addEventListener("click", applyNiftiDilation);
+}
+
+if (exportNiftiMaskedBtn) {
+  exportNiftiMaskedBtn.addEventListener("click", () => {
+    void exportNiftiMaskedImage();
+  });
+}
+
 if (folderInput) {
   folderInput.addEventListener("change", async (event) => {
     pushLog("收到目录选择事件，开始扫描文件...");
-    const files = Array.from(event.target.files || []).filter((f) => f.size > 0);
+    const files = Array.from(event.target.files || []).filter((f) => f.size > 0 && !isNiftiFile(f));
     if (!files.length) {
       setStatus("未检测到可读取文件，请重新选择目录。");
       return;

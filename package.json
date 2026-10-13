@@ -22,6 +22,7 @@
             "index.html",
             "styles.css",
             "app.js",
+            "nifti_adapter.js",
             "bootstrap_cn_v1.js",
             "main.js",
             "preload.js",

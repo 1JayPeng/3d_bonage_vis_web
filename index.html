@@ -28,6 +28,29 @@
                 <input id="folderInput" type="file" webkitdirectory directory multiple />
             </label>
 
+            <div class="action-row nifti-row">
+                <label class="file-picker">
+                    <span>加载 NIfTI（.nii / .nii.gz）</span>
+                    <input id="niftiInput" type="file" accept=".nii,.nii.gz,application/gzip" webkitdirectory directory multiple />
+                </label>
+                <label class="nifti-select-label">
+                    <span>显示数据集</span>
+                    <select id="niftiDatasetSelect" disabled>
+                        <option>请先加载 NIfTI</option>
+                    </select>
+                </label>
+            </div>
+
+            <div class="action-row nifti-mask-row">
+                <label class="nifti-select-label">
+                    <span>Pred XY 膨胀半径</span>
+                    <input id="niftiDilationInput" type="range" min="0" max="12" step="1" value="2" />
+                    <output id="niftiDilationValue">2 像素</output>
+                </label>
+                <button id="applyNiftiDilationBtn" class="action-btn" type="button">应用 Pred 膨胀</button>
+                <button id="exportNiftiMaskedBtn" class="action-btn" type="button" disabled>导出 Pred 区域原图</button>
+            </div>
+
             <div class="action-row">
                 <button id="exportDicomBtn" class="action-btn" type="button" disabled>导出删除版 DICOM</button>
             </div>

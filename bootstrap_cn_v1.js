@@ -91,7 +91,10 @@
       ]);
 
       setStatus("依赖加载完成，正在启动应用...");
-      await loadModule("./app.js");
+      const appUrl = window.location.protocol === "file:"
+        ? "./app.js"
+        : "./app.js?v=20261009-nifti-overlay";
+      await loadModule(appUrl);
 
       const booted = await waitForAppBoot(15000);
       if (!booted) {
